@@ -1,0 +1,41 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8000:8080"
+    env_file:
+      - .env
+    environment:
+      # Override Redis URL to use the compose service name
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  locust:
+    image: locustio/locust:latest
+    profiles:
+      - loadtest
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./load:/mnt/locust
+    command: -f /mnt/locust/locustfile.py --host http://api:8080
+    depends_on:
+      api:
+        condition: service_healthy

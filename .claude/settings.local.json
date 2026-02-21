@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(.venv/bin/pip install:*)",
+      "Bash(.venv/bin/uv pip install:*)",
+      "Bash(brew list:*)",
+      "Read(//usr/local/bin/**)"
+    ]
+  }
+}
