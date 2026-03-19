@@ -32,7 +32,7 @@ This document is the baseline for architecture, implementation, security control
 
 ### Future Phase (Planned)
 
-- **Multi-region active-active architecture**: Active-active deployment across two or more U.S. regions with global token vault consistency, cross-region PFK/PEK replication via Cloud KMS, and sub-5-minute RPO on regional failure. Initial delivery is single-region; multi-region is a planned follow-on phase requiring separate architecture and DR requirements. See §15 Risks for single-region dependency risk acknowledgment.
+- **Multi-region active-active architecture**: Active-active deployment across two or more U.S. regions with global token vault consistency, cross-region VFK/VEK replication via Cloud KMS, and sub-5-minute RPO on regional failure. Initial delivery is single-region; multi-region is a planned follow-on phase requiring separate architecture and DR requirements. See §15 Risks for single-region dependency risk acknowledgment.
 
 ## 3. Stakeholders
 
@@ -216,14 +216,14 @@ This document is the baseline for architecture, implementation, security control
 
 ### SR-04 Logging And Redaction
 
-- PAN/CVV shall never be present in logs, traces, or error bodies.
+- Sensitive values (PAN, bank account number), CVV, and routing numbers shall never be present in logs, traces, or error bodies.
 - Structured logging shall enforce sensitive field redaction.
 
 ### SR-05 PCI Evidence
 
 - System shall produce artifacts for audits:
   - access review records (monthly IAM access reviews)
-  - key rotation logs (PEK and PFK rotation events from Cloud KMS)
+  - key rotation logs (VEK and VFK rotation events from Cloud KMS)
   - key/data separation of duties validation (quarterly IAM snapshot review)
   - security test evidence
   - incident and change records
@@ -247,12 +247,12 @@ This document is the baseline for architecture, implementation, security control
 - If password-based authentication is used as one factor, passwords shall be a minimum of **12 characters** in length, meeting complexity requirements per PCI DSS 8.3.6. Password-only single-factor access to any CDE resource is prohibited.
 - MFA enforcement shall be validated as part of each release readiness review and included in the quarterly IAM access review evidence.
 
-### SR-08 Automated PAN Data Discovery (PCI DSS 4.0 Req 12.5.2)
+### SR-08 Automated Sensitive Data Discovery (PCI DSS 4.0 Req 12.5.2)
 
-- Automated tooling shall scan all accessible data storage locations within or adjacent to the CDE boundary for the presence of unprotected or out-of-place PANs. Scan targets shall include at minimum: Cloud Logging export buckets, BigQuery audit tables, Cloud Error Reporting payloads, Spanner table exports, Redis cache snapshots, CI/CD artifact storage, and any developer-accessible non-production environments that may receive real data.
-- PAN data discovery scans shall be executed at minimum every **12 months** and additionally after any significant infrastructure change (e.g., new log sinks, new storage buckets, data pipeline modifications, or schema changes).
-- Discovery tool results shall be reviewed within 30 days of scan completion. Any confirmed PAN presence outside the designated vault boundary shall be classified as a potential data exposure incident and handled per OR-04 incident procedures.
-- SR-04 (log redaction) is a preventive control; SR-08 (PAN discovery) is a detective control. Both are required — one does not substitute for the other. Evidence of scan execution and remediation shall be maintained as a PCI compliance artifact.
+- Automated tooling shall scan all accessible data storage locations within or adjacent to the CDE boundary for the presence of unprotected or out-of-place sensitive values (PANs, bank account numbers). Scan targets shall include at minimum: Cloud Logging export buckets, BigQuery audit tables, Cloud Error Reporting payloads, Spanner table exports, Redis cache snapshots, CI/CD artifact storage, and any developer-accessible non-production environments that may receive real data.
+- Sensitive data discovery scans shall be executed at minimum every **12 months** and additionally after any significant infrastructure change (e.g., new log sinks, new storage buckets, data pipeline modifications, or schema changes).
+- Discovery tool results shall be reviewed within 30 days of scan completion. Any confirmed sensitive value presence outside the designated vault boundary shall be classified as a potential data exposure incident and handled per OR-04 incident procedures.
+- SR-04 (log redaction) is a preventive control; SR-08 (sensitive data discovery) is a detective control. Both are required — one does not substitute for the other. Evidence of scan execution and remediation shall be maintained as a PCI compliance artifact.
 
 ## 8. Performance And Scale Requirements
 
@@ -308,7 +308,7 @@ This document is the baseline for architecture, implementation, security control
   - authz anomalies (including detokenize denied spikes and scope mismatch patterns)
   - key access anomalies (unexpected KMS key usage, out-of-context service account activity)
   - dependency saturation
-  - PAN data discovery findings outside vault boundary (per SR-08)
+  - Sensitive data discovery findings outside vault boundary (per SR-08)
 
 ### OR-03 Release Safety
 
@@ -332,11 +332,14 @@ This document is the baseline for architecture, implementation, security control
 
 - Unit and integration tests shall cover:
   - reusable vs one-time behavior
-  - scope_qualifiers isolation: tokens issued under different qualifier values for the same PAN shall not be retrievable via lookups with different qualifier values
+  - scope_qualifiers isolation: tokens issued under different qualifier values for the same sensitive value shall not be retrievable via lookups with different qualifier values
+  - companion field handling: expiry_month/expiry_year for PAN, routing_number for BANK_ACCOUNT, stored and canonicalized correctly in scope_qualifiers
+  - sensitive_data_type validation: PAN (Luhn check), BANK_ACCOUNT (4–17 digits), unknown types rejected
+  - blank/empty optional field stripping: blank `domain`, empty `scope_qualifiers`, and other empty optional fields processed gracefully
   - idempotency behavior (tokenize) and deduplication window (detokenize)
   - revocation effects by token and by fingerprint selector with and without scope_qualifiers filter
-  - authorization denial paths (missing domain permission, missing full-pan scope, invalid reason_code)
-  - masked vs full PAN response gating by caller scope
+  - authorization denial paths (missing domain permission, missing full-value scope, invalid reason_code)
+  - masked vs full value response gating by caller scope and correct masking per sensitive_data_type (PAN: first 6 + last 4; BANK_ACCOUNT: last 4 only)
 
 ### TV-02 Performance Validation
 
@@ -373,7 +376,7 @@ This document is the baseline for architecture, implementation, security control
 - The Shared Responsibility Agreement shall specify at minimum:
   - The security controls Jack Henry's tokenization platform is responsible for (vault encryption, key management per institution, access control, audit logging, PCI DSS 4.0 compliance).
   - The controls that remain the institution's responsibility (e.g., PAN handling within the institution's own systems before submission to Jack Henry applications, cardholder-facing security controls, institution-side authentication).
-  - The cardholder data Jack Henry stores on the institution's behalf and the isolation guarantees (institution-scoped PFK, institution-partitioned vault).
+  - The cardholder data Jack Henry stores on the institution's behalf and the isolation guarantees (institution-scoped VFK, institution-partitioned vault).
   - The institution's right to audit Jack Henry's PCI compliance posture via QSA attestation, SOC 2 Type II report, or client audit rights per the master service agreement.
 - The Shared Responsibility Agreement shall be reviewed and re-executed **annually** and upon any material change to the tokenization platform's security architecture or data handling practices.
 - Jack Henry's internal product teams (Banno, SilverLake, etc.) are not parties to the institution Shared Responsibility Agreement — they operate under internal Jack Henry security and data handling policies. The institution agreement covers Jack Henry as a whole.
@@ -398,12 +401,12 @@ Service is accepted for production when all are true:
 - Load tests demonstrate compliance with NFR targets in staging.
 - Alerting, runbooks, and rollout controls are validated through drills.
 - Compliance and security stakeholders sign off release readiness.
-- **SR-01**: Field-level (application-layer) AES-256 encryption is implemented and verified; two distinct Cloud KMS key classes (PEK and PFK) are provisioned with HSM backing and correct IAM scope separation.
-- **SR-01 / DR-01**: PAN fingerprint implementation uses HMAC-SHA-256 with a Cloud KMS-managed PFK; no unkeyed hash of PAN is present anywhere in the system.
+- **SR-01**: Field-level (application-layer) AES-256 encryption is implemented and verified; two distinct Cloud KMS key classes (VEK and VFK) are provisioned with HSM backing and correct IAM scope separation.
+- **SR-01 / DR-01**: Value fingerprint implementation uses HMAC-SHA-256 with a Cloud KMS-managed VFK; no unkeyed hash of any sensitive value is present anywhere in the system.
 - **SR-02**: Workload Identity is confirmed as the runtime credential mechanism; no hard-coded credentials exist in source code, CI/CD configs, or container images (validated by SAST scan).
 - **SR-03**: Key/data separation of duties is confirmed via IAM policy snapshot; key custodian identity holds no data-plane access and vice versa.
 - **SR-07**: MFA enforcement is active at the identity provider level for all CDE-accessible human identities; validated via IdP policy configuration export.
-- **SR-08**: Baseline PAN data discovery scan is completed across all CDE-adjacent storage targets with no confirmed out-of-vault findings.
+- **SR-08**: Baseline sensitive data discovery scan is completed across all CDE-adjacent storage targets with no confirmed out-of-vault findings.
 - **TV-03**: OWASP Top 10 test evidence bundle (injection, deserialization, access control, misconfiguration) is produced and attached to the release candidate.
 - **CR-01**: Executive compliance review process is established with first quarterly review completed and documented.
 - **CR-02**: Shared Responsibility Agreement template is finalized, reviewed by legal, and executed with at least one institution client prior to production launch.
@@ -415,9 +418,9 @@ Service is accepted for production when all are true:
 - 50k TPS achievement depends on production-grade scaling and distributed load generation.
 - Single-region design minimizes complexity but increases regional dependency risk; see Future Phase for multi-region plan.
 - **GKE private cluster** was selected as the compute layer. VPC-native pod networking directly satisfies PCI DSS 1.2/1.3 network segmentation requirements without Customized Approach. If the platform is ever reconsidered for Cloud Run, network segmentation controls must be reassessed and a Customized Approach or Compensating Control package prepared for QSA review (see SR-02a).
-- **Delegation trust risk**: The tokenization service trusts caller applications to supply the correct `institution_id` for the operation being performed. A bug, misconfiguration, or compromise in a Jack Henry application could cause institution A's tokens to be issued or detokenized under institution B's `institution_id`. Mitigations: delegation authorization grant table (SR-02), institution-scoped PFK (cross-institution token use produces wrong fingerprint, not vault hit), mandatory `institution_id` in all audit events (detectability), and per-caller-application anomaly alerting.
-- **Institution key provisioning**: Each new institution onboarding requires provisioning of both an institution-scoped PFK and PEK in Cloud KMS. This is an operational dependency; onboarding automation and key provisioning runbooks are required before general availability.
-- **KMS key proliferation**: With institution-scoped PFKs, the number of KMS keys grows with institution count. Key management tooling and automation must scale accordingly; this should be validated during the pilot phase with initial institution onboarding.
+- **Delegation trust risk**: The tokenization service trusts caller applications to supply the correct `institution_id` for the operation being performed. A bug, misconfiguration, or compromise in a Jack Henry application could cause institution A's tokens to be issued or detokenized under institution B's `institution_id`. Mitigations: delegation authorization grant table (SR-02), institution-scoped VFK (cross-institution token use produces wrong fingerprint, not vault hit), mandatory `institution_id` in all audit events (detectability), and per-caller-application anomaly alerting.
+- **Institution key provisioning**: Each new institution onboarding requires provisioning of both an institution-scoped VFK and VEK in Cloud KMS. This is an operational dependency; onboarding automation and key provisioning runbooks are required before general availability.
+- **KMS key proliferation**: With institution-scoped VFKs, the number of KMS keys grows with institution count. Key management tooling and automation must scale accordingly; this should be validated during the pilot phase with initial institution onboarding.
 
 ## 16. References
 
