@@ -25,7 +25,7 @@ class MemoryVaultStore(VaultStore):
         scope_key = (
             record.institution_id,
             record.domain,
-            record.pan_fingerprint,
+            record.value_fingerprint,
             record.scope_qualifiers_canonical,
             record.purpose,
         )
@@ -48,11 +48,11 @@ class MemoryVaultStore(VaultStore):
         self,
         institution_id: str,
         domain: str,
-        pan_fingerprint: str,
+        value_fingerprint: str,
         scope_qualifiers_canonical: str,
         purpose: str,
     ) -> TokenRecord | None:
-        scope_key = (institution_id, domain, pan_fingerprint, scope_qualifiers_canonical, purpose)
+        scope_key = (institution_id, domain, value_fingerprint, scope_qualifiers_canonical, purpose)
         with self._lock:
             token = self._by_scope.get(scope_key)
             if token is None:
@@ -74,7 +74,7 @@ class MemoryVaultStore(VaultStore):
             scope_key = (
                 institution_id,
                 record.domain,
-                record.pan_fingerprint,
+                record.value_fingerprint,
                 record.scope_qualifiers_canonical,
                 record.purpose,
             )
@@ -84,7 +84,7 @@ class MemoryVaultStore(VaultStore):
     def revoke_by_fingerprint(
         self,
         institution_id: str,
-        pan_fingerprint: str,
+        value_fingerprint: str,
         domain: str | None,
         scope_qualifiers_filter: dict[str, str] | None,
     ) -> int:
@@ -94,7 +94,7 @@ class MemoryVaultStore(VaultStore):
                 r
                 for (iid, _tok), r in self._by_token.items()
                 if iid == institution_id
-                and r.pan_fingerprint == pan_fingerprint
+                and r.value_fingerprint == value_fingerprint
                 and r.status == "ACTIVE"
             ]
             for record in candidates:
@@ -112,7 +112,7 @@ class MemoryVaultStore(VaultStore):
                 scope_key = (
                     institution_id,
                     record.domain,
-                    record.pan_fingerprint,
+                    record.value_fingerprint,
                     record.scope_qualifiers_canonical,
                     record.purpose,
                 )

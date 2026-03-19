@@ -79,8 +79,9 @@ app = FastAPI(
     version="0.1.0",
     description=(
         "PCI DSS 4.0-compliant tokenization platform POV — Jack Henry Associates. "
-        "Tokenizes PANs, maintains a secure token vault, supports multiple tokens per PAN "
-        "scoped by institution and caller context, and provides robust audit logging. "
+        "Tokenizes sensitive values (PANs, bank account numbers, etc.), maintains a secure "
+        "token vault, supports multiple tokens per value scoped by institution, data type, "
+        "and caller context, and provides robust audit logging. "
         "\n\n**Authentication**: Supply `X-Caller-Identity: caller@jh.iam` header (POV stub; "
         "production uses Google Cloud Workload Identity JWT). "
         "\n\n**Authorization**: Delegation grants configured via `DELEGATION_GRANTS_JSON` env var."

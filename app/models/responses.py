@@ -7,9 +7,10 @@ from pydantic import BaseModel
 
 class TokenizeResponse(BaseModel):
     token: str
+    sensitive_data_type: str
     token_mode: str
     institution_id: str
-    masked_pan: str
+    masked_value: str
     scope_qualifiers: dict[str, str]
     expires_at: datetime | None
 
@@ -17,7 +18,8 @@ class TokenizeResponse(BaseModel):
 class DetokenizeResponse(BaseModel):
     token: str
     institution_id: str
-    pan: str  # masked or full depending on request
+    sensitive_data_type: str
+    sensitive_value: str  # masked or full depending on request
     reason_code: str
 
 

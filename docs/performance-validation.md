@@ -2,10 +2,11 @@
 
 ## Context
 
-The tokenization service is a Jack Henry internal platform consumed by Banno, SilverLake, Symitar, and ProfitStars on behalf of bank and credit union institution clients. Load test scenarios must reflect:
+The tokenization service is a Jack Henry internal platform consumed by Banno, SilverLake, Symitar, and ProfitStars on behalf of bank and credit union institution clients. The service tokenizes multiple sensitive data types including PAN and bank account numbers. Load test scenarios must reflect:
 
 - Multiple JH caller applications generating concurrent traffic.
 - Multiple institutions (`institution_id`) served in parallel — institution isolation must hold under load.
+- Mixed sensitive data types: PAN and bank account number tokenization traffic exercised within the same test run.
 - Institution Registry and delegation grant lookups as latency contributors.
 - Redis cache keyed by `institution_id` as the leading dimension.
 - Per-institution and per-caller-application rate limit buckets exercised independently.
@@ -28,10 +29,10 @@ Load tests must simulate a realistic Jack Henry traffic profile:
 
 | Simulated Caller   | Share | Institutions  | Notes                                     |
 | ------------------ | ----- | ------------- | ----------------------------------------- |
-| Banno              | 50%   | 10–50         | Mix of REUSABLE and ONE_TIME modes        |
-| SilverLake         | 30%   | 5–20          | Predominantly REUSABLE                    |
-| Symitar            | 15%   | 3–10          | Mix of domains (card-payments, ach)       |
-| ProfitStars        | 5%    | 1–5           | Low-volume, detokenize-heavy              |
+| Banno              | 50%   | 10–50         | Mix of REUSABLE and ONE_TIME modes; PAN and bank account number traffic |
+| SilverLake         | 30%   | 5–20          | Predominantly REUSABLE; primarily PAN traffic |
+| Symitar            | 15%   | 3–10          | Mix of domains (card-payments, ach); PAN and bank account number traffic |
+| ProfitStars        | 5%    | 1–5           | Low-volume, detokenize-heavy; primarily bank account number traffic |
 
 - Each caller uses a distinct simulated Workload Identity service account.
 - Each institution has a unique `institution_id` in the test registry with pre-provisioned test PFK and PEK.
@@ -78,7 +79,7 @@ Load tests must simulate a realistic Jack Henry traffic profile:
   - Keep Spanner CPU ≤ 65% at steady peak; no cross-institution index fan-out.
 - Cache:
   - Maintain Redis hit ratio ≥ 85% for hot reads.
-  - Confirm Redis cache key format: `{institution_id}:{domain}:{scope_qualifiers_canonical}:{purpose}:{pan_fingerprint}`.
+  - Confirm Redis cache key format: `{institution_id}:{domain}:{scope_qualifiers_canonical}:{purpose}:{value_fingerprint}`.
   - Set TTL strategy by token mode and revocation policy.
 - Rate limits:
   - Verify per-institution rate limit bucket isolation: one institution's burst does not consume another's quota.
@@ -100,7 +101,7 @@ Run a targeted rate limit test alongside the main load test:
   - Detokenize p95 ≤ 35 ms, p99 ≤ 70 ms
 - Error rate < 1% (excluding expected `429` from rate limit test).
 - No cross-institution data served: chaos test verifies institution A's tokens never returned for institution B requests.
-- No unauthorized detokenize success paths — delegation grant failure returns `403`, never PAN.
+- No unauthorized detokenize success paths — delegation grant failure returns `403`, never the sensitive value.
 - Institution Registry lookup ≤ 2ms and delegation grant check ≤ 1ms confirmed under load.
 
 ## Current Execution Note
@@ -110,4 +111,4 @@ Run a targeted rate limit test alongside the main load test:
   - Stage A (`-u 100`, 20s): ~1340 req/s aggregate, 0% failures.
   - Stage B (`-u 250`, 20s): ~1310 req/s aggregate, 0% failures.
   - Stage C (`-u 500`, 20s): ~1284 req/s aggregate, 0% failures.
-- Local runs use a single test institution; multi-institution and multi-caller-app scenarios require GCP staging with distributed load generators, pre-seeded Institution Registry, and production-like networking.
+- Local runs use a single test institution with PAN test data; multi-institution, multi-data-type (PAN + bank account number), and multi-caller-app scenarios require GCP staging with distributed load generators, pre-seeded Institution Registry, and production-like networking.

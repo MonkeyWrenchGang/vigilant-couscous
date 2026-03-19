@@ -3,11 +3,16 @@ from __future__ import annotations
 import pytest
 
 from app.models.requests import DetokenizeRequest, TokenizeRequest
-from tests.conftest import TEST_CALLER, TEST_INSTITUTION, TEST_PAN
+from tests.conftest import TEST_BANK_ACCOUNT, TEST_CALLER, TEST_INSTITUTION, TEST_PAN
 
 
-def _tokenize(service, pan=TEST_PAN, institution_id=TEST_INSTITUTION):
-    req = TokenizeRequest(pan=pan, institution_id=institution_id, domain="card-payments")
+def _tokenize(service, sensitive_value=TEST_PAN, sensitive_data_type="PAN", institution_id=TEST_INSTITUTION):
+    req = TokenizeRequest(
+        sensitive_data_type=sensitive_data_type,
+        sensitive_value=sensitive_value,
+        institution_id=institution_id,
+        domain="card-payments",
+    )
     return service.tokenize(req, TEST_CALLER)
 
 
@@ -22,28 +27,40 @@ def _detokenize_req(token, **kwargs) -> DetokenizeRequest:
 
 
 class TestDetokenizeService:
-    def test_masked_pan_default(self, tokenize_service, detokenize_service):
+    def test_masked_default(self, tokenize_service, detokenize_service):
         tr = _tokenize(tokenize_service)
         dr = detokenize_service.detokenize(_detokenize_req(tr.token), TEST_CALLER)
-        assert dr.pan == "411111******1111"
+        assert dr.sensitive_value == "411111******1111"
+        assert dr.sensitive_data_type == "PAN"
 
-    def test_full_pan_with_operator_id(self, tokenize_service, detokenize_service):
+    def test_full_with_operator_id(self, tokenize_service, detokenize_service):
         tr = _tokenize(tokenize_service)
-        req = _detokenize_req(tr.token, detokenize_mode="FULL_PAN", operator_id="op-001")
+        req = _detokenize_req(tr.token, detokenize_mode="FULL", operator_id="op-001")
         dr = detokenize_service.detokenize(req, TEST_CALLER)
-        assert dr.pan == TEST_PAN
+        assert dr.sensitive_value == TEST_PAN
 
-    def test_full_pan_without_operator_id_raises(self, tokenize_service, detokenize_service):
+    def test_full_without_operator_id_raises(self, tokenize_service, detokenize_service):
         tr = _tokenize(tokenize_service)
-        # Model-level validation should catch this, but test service layer too
         with pytest.raises(Exception):  # ValueError or ValidationError
             DetokenizeRequest(
                 token=tr.token,
                 institution_id=TEST_INSTITUTION,
                 reason_code="test",
-                detokenize_mode="FULL_PAN",
+                detokenize_mode="FULL",
                 operator_id=None,
             )
+
+    def test_bank_account_masked(self, tokenize_service, detokenize_service):
+        tr = _tokenize(tokenize_service, sensitive_value=TEST_BANK_ACCOUNT, sensitive_data_type="BANK_ACCOUNT")
+        dr = detokenize_service.detokenize(_detokenize_req(tr.token), TEST_CALLER)
+        assert dr.sensitive_value == "******7890"
+        assert dr.sensitive_data_type == "BANK_ACCOUNT"
+
+    def test_bank_account_full(self, tokenize_service, detokenize_service):
+        tr = _tokenize(tokenize_service, sensitive_value=TEST_BANK_ACCOUNT, sensitive_data_type="BANK_ACCOUNT")
+        req = _detokenize_req(tr.token, detokenize_mode="FULL", operator_id="op-001")
+        dr = detokenize_service.detokenize(req, TEST_CALLER)
+        assert dr.sensitive_value == TEST_BANK_ACCOUNT
 
     def test_revoked_token_returns_lookup_error(self, tokenize_service, detokenize_service, revoke_service):
         from app.models.requests import RevokeRequest

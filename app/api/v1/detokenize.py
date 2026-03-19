@@ -23,12 +23,12 @@ def detokenize(
     caller_identity: str = Depends(get_caller_identity),
     service: DetokenizeService = Depends(_get_service),
 ) -> DetokenizeResponse:
-    """Resolve a token to a PAN.
+    """Resolve a token to its sensitive value (PAN, bank account number, etc.).
 
     - Requires `institution_id` and `reason_code`.
-    - Returns **masked PAN** (`411111******1111`) by default.
-    - `FULL_PAN` mode requires `operator_id` in the request body.
-    - Fail-closed: any authorization failure returns 403, never PAN.
+    - Returns **masked value** by default.
+    - `FULL` mode requires `operator_id` in the request body.
+    - Fail-closed: any authorization failure returns 403, never the sensitive value.
     - Token not found, revoked, or expired returns identical 404 (oracle-safe).
     """
     try:

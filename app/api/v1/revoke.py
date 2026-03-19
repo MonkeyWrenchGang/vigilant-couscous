@@ -26,9 +26,9 @@ def revoke(
     """Revoke tokens by token value or by fingerprint selector.
 
     - **Token revocation**: provide `token` — revokes a single token.
-    - **Fingerprint-selector revocation**: provide `pan_fingerprint` with optional
+    - **Fingerprint-selector revocation**: provide `value_fingerprint` with optional
       `domain` and `scope_qualifiers_filter` for targeted bulk revocation
-      (e.g., decommission one JH application's tokens for a card).
+      (e.g., decommission one JH application's tokens for a card or account).
     - `revoked_count` of 0 means no matching ACTIVE tokens were found.
     """
     try:

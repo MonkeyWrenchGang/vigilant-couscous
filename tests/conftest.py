@@ -12,6 +12,7 @@ TEST_INSTITUTION = "inst-test-001"
 TEST_INSTITUTION_2 = "inst-test-002"
 TEST_PAN = "4111111111111111"
 TEST_PAN_2 = "5500005555555559"
+TEST_BANK_ACCOUNT = "1234567890"
 
 # Set env vars before importing app
 os.environ.setdefault("CRYPTO_PROVIDER", "local")

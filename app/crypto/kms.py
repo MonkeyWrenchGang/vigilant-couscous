@@ -49,21 +49,21 @@ class KMSCryptoProvider(CryptoProvider):
             f"/keyRings/{self._key_ring}/cryptoKeys/inst-{institution_id}-pek"
         )
 
-    def hmac_fingerprint(self, institution_id: str, pan: str) -> str:
+    def hmac_fingerprint(self, institution_id: str, value: str) -> str:
         response = self._client.mac_sign(
             request={
                 "name": self._pfk_key_name(institution_id) + "/cryptoKeyVersions/1",
-                "data": pan.encode(),
+                "data": value.encode(),
             }
         )
         return response.mac.hex()
 
-    def encrypt_pan(self, institution_id: str, pan: str) -> str:
+    def encrypt_value(self, institution_id: str, value: str) -> str:
         nonce = os.urandom(12)
         response = self._client.raw_encrypt(
             request={
                 "name": self._pek_key_name(institution_id) + "/cryptoKeyVersions/1",
-                "plaintext": pan.encode(),
+                "plaintext": value.encode(),
                 "additional_authenticated_data": institution_id.encode(),
                 "initialization_vector": nonce,
             }
@@ -71,7 +71,7 @@ class KMSCryptoProvider(CryptoProvider):
         ciphertext = bytes(response.ciphertext)
         return base64.b64encode(nonce + ciphertext).decode()
 
-    def decrypt_pan(self, institution_id: str, ciphertext_b64: str) -> str:
+    def decrypt_value(self, institution_id: str, ciphertext_b64: str) -> str:
         raw = base64.b64decode(ciphertext_b64)
         nonce, ciphertext = raw[:12], raw[12:]
         response = self._client.raw_decrypt(

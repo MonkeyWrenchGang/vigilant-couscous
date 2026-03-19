@@ -3,12 +3,13 @@ from __future__ import annotations
 import pytest
 
 from app.models.requests import TokenizeRequest
-from tests.conftest import TEST_CALLER, TEST_INSTITUTION, TEST_INSTITUTION_2, TEST_PAN
+from tests.conftest import TEST_BANK_ACCOUNT, TEST_CALLER, TEST_INSTITUTION, TEST_INSTITUTION_2, TEST_PAN
 
 
 def _req(**kwargs) -> TokenizeRequest:
     defaults = dict(
-        pan=TEST_PAN,
+        sensitive_data_type="PAN",
+        sensitive_value=TEST_PAN,
         institution_id=TEST_INSTITUTION,
         domain="card-payments",
         token_mode="REUSABLE",
@@ -38,7 +39,7 @@ class TestTokenizeService:
     def test_institution_isolation_different_fingerprint(self, tokenize_service, crypto):
         fp1 = crypto.hmac_fingerprint(TEST_INSTITUTION, TEST_PAN)
         fp2 = crypto.hmac_fingerprint(TEST_INSTITUTION_2, TEST_PAN)
-        assert fp1 != fp2, "Same PAN must produce different fingerprints for different institutions"
+        assert fp1 != fp2, "Same value must produce different fingerprints for different institutions"
 
     def test_scope_qualifiers_differentiate_tokens(self, tokenize_service):
         r1 = tokenize_service.tokenize(_req(scope_qualifiers={"application": "banno-mobile"}), TEST_CALLER)
@@ -53,18 +54,40 @@ class TestTokenizeService:
         assert r1.token == r2.token, "Scope qualifier order must not matter for REUSABLE lookup"
 
     def test_masked_pan_in_response(self, tokenize_service):
-        r = tokenize_service.tokenize(_req(pan="4111111111111111"), TEST_CALLER)
-        assert r.masked_pan == "411111******1111"
+        r = tokenize_service.tokenize(_req(sensitive_value="4111111111111111"), TEST_CALLER)
+        assert r.masked_value == "411111******1111"
 
     def test_short_pan_masking(self, tokenize_service):
-        r = tokenize_service.tokenize(_req(pan="4111111111111"), TEST_CALLER)
-        # 13-digit: first 6 + 3 stars + last 4
-        assert r.masked_pan == "411111***1111"
+        r = tokenize_service.tokenize(_req(sensitive_value="4111111111111"), TEST_CALLER)
+        # 13-digit PAN: first 6 + 3 stars + last 4
+        assert r.masked_value == "411111***1111"
+
+    def test_bank_account_masking(self, tokenize_service):
+        r = tokenize_service.tokenize(
+            _req(sensitive_data_type="BANK_ACCOUNT", sensitive_value=TEST_BANK_ACCOUNT, domain="ach-transfers"),
+            TEST_CALLER,
+        )
+        # 10-digit account: 6 stars + last 4
+        assert r.masked_value == "******7890"
+        assert r.sensitive_data_type == "BANK_ACCOUNT"
+
+    def test_bank_account_with_routing_in_scope(self, tokenize_service):
+        r = tokenize_service.tokenize(
+            _req(
+                sensitive_data_type="BANK_ACCOUNT",
+                sensitive_value=TEST_BANK_ACCOUNT,
+                domain="ach-transfers",
+                scope_qualifiers={"routing_number": "021000021"},
+            ),
+            TEST_CALLER,
+        )
+        assert r.scope_qualifiers == {"routing_number": "021000021"}
 
     def test_response_fields(self, tokenize_service):
         req = _req()
         r = tokenize_service.tokenize(req, TEST_CALLER)
         assert r.institution_id == TEST_INSTITUTION
+        assert r.sensitive_data_type == "PAN"
         assert r.token_mode == "REUSABLE"
         assert r.expires_at is None  # no ttl_seconds
 
@@ -72,3 +95,17 @@ class TestTokenizeService:
         req = _req(ttl_seconds=300, token_mode="ONE_TIME")
         r = tokenize_service.tokenize(req, TEST_CALLER)
         assert r.expires_at is not None
+
+    def test_blank_scope_qualifiers_stripped(self, tokenize_service):
+        req = _req(scope_qualifiers={"key": "  value  ", "  ": "blank_key", "empty_val": ""})
+        r = tokenize_service.tokenize(req, TEST_CALLER)
+        assert r.scope_qualifiers == {"key": "value"}
+
+    def test_domain_defaults_to_default(self, tokenize_service):
+        req = TokenizeRequest(
+            sensitive_data_type="PAN",
+            sensitive_value=TEST_PAN,
+            institution_id=TEST_INSTITUTION,
+        )
+        r = tokenize_service.tokenize(req, TEST_CALLER)
+        assert r.token is not None

@@ -5,8 +5,9 @@
 Define requirements for a high-volume, low-latency **central PCI tokenization platform** built and operated by Jack Henry Associates on GCP with Python services. This service is an internal shared infrastructure component consumed by Jack Henry product lines (Banno, SilverLake, Symitar, ProfitStars, and others) on behalf of their bank and credit union clients.
 
 Core capabilities:
-- Token vault storage for sensitive cardholder data, isolated per institution (bank/credit union client)
-- Multiple tokens per card by domain, scope qualifiers, and purpose
+- Token vault storage for multiple sensitive data types (PANs, bank account numbers), isolated per institution (bank/credit union client)
+- A `sensitive_data_type` discriminator field identifies the type of data being tokenized (e.g., `"PAN"`, `"BANK_ACCOUNT"`)
+- Multiple tokens per sensitive value by domain, scope qualifiers, and purpose
 - Controlled de-tokenization for authorized internal services with mandatory audit context
 - Delegation model: Jack Henry application services act on behalf of institutions; institution identity is a required request parameter validated against the caller’s authorized institution set
 
@@ -16,8 +17,8 @@ This document is the baseline for architecture, implementation, security control
 
 ### In Scope
 
-- Tokenization API for PAN to token conversion.
-- De-tokenization API for token to PAN retrieval with strict authorization.
+- Tokenization API for sensitive value (PAN, bank account number) to token conversion.
+- De-tokenization API for token to sensitive value retrieval with strict authorization.
 - Token revocation API.
 - Vault data model and cryptographic key lifecycle controls.
 - Audit logging and compliance evidence generation.
@@ -52,18 +53,21 @@ This document is the baseline for architecture, implementation, security control
 ## 4. Definitions
 
 - **PAN**: Primary Account Number.
-- **CHD**: Cardholder Data (card data that PCI DSS Part 3 requires to be protected).
-- **CDE**: Cardholder Data Environment; systems that process, store, or transmit CHD.
-- **Token**: A surrogate value substituted for sensitive data (e.g., PAN). A token is meaningful only as a lookup key in a specific context. Per PCI tokenization guidance and GCP architecture: tokens must not contain user-specific information and must not be directly decryptable, so that loss of tokens does not compromise cardholder data.
-- **Institution**: A Jack Henry bank or credit union client (e.g., First National Bank, a credit union). The institution is the **cardholder data isolation boundary** — vault records, PAN fingerprints, and cryptographic keys are scoped per institution. Identified by `institution_id` in all API requests.
+- **Bank Account Number**: A financial institution account number (4–17 digits per ACH standards).
+- **Sensitive Data Type**: A discriminator field (`sensitive_data_type`) identifying the category of data being tokenized. Supported values: `"PAN"`, `"BANK_ACCOUNT"`.
+- **Sensitive Value**: The `sensitive_value` field containing the actual data to be tokenized (replaces the former `pan` field). The interpretation and validation rules for this field depend on the `sensitive_data_type`.
+- **CHD**: Cardholder Data (card data that PCI DSS Part 3 requires to be protected). In this document, references to CHD protection extend to all sensitive data types handled by the tokenization service (including bank account numbers) unless explicitly limited to cardholder data.
+- **CDE**: Cardholder Data Environment; systems that process, store, or transmit CHD or other sensitive financial data protected by this service.
+- **Token**: A surrogate value substituted for sensitive data (e.g., PAN, bank account number). A token is meaningful only as a lookup key in a specific context. Per PCI tokenization guidance and GCP architecture: tokens must not contain user-specific information and must not be directly decryptable, so that loss of tokens does not compromise the underlying sensitive data.
+- **Institution**: A Jack Henry bank or credit union client (e.g., First National Bank, a credit union). The institution is the **sensitive data isolation boundary** — vault records, value fingerprints, and cryptographic keys are scoped per institution. Identified by `institution_id` in all API requests.
 - **Caller Application**: A Jack Henry internal application service (e.g., Banno, SilverLake, Symitar, ProfitStars) that calls the tokenization service on behalf of an institution. Authenticated via Workload Identity. A single caller application may be authorized to act on behalf of multiple institutions.
 - **Domain**: Namespace for token scoping within an institution (e.g., card-payments, ach, digital-banking). Distinct from the caller application identity.
-- **Scope Qualifier**: An optional caller-supplied key-value label for further differentiating token issuance within an institution and domain (e.g., `{"application": "banno-mobile", "channel": "web"}`). Multiple scope qualifiers may be provided as a key-value map. See FR-01 and FR-02.
+- **Scope Qualifier**: An optional caller-supplied key-value label for further differentiating token issuance within an institution and domain (e.g., `{"application": "banno-mobile", "channel": "web"}`). Multiple scope qualifiers may be provided as a key-value map. Scope qualifiers also absorb companion fields associated with the sensitive data type (e.g., `expiry_month` and `expiry_year` for PANs; `routing_number` for bank accounts). Companion fields are stored as scope qualifier entries and participate in the canonical sort. See FR-01 and FR-02.
 - **Purpose**: Allowed business function (payment, refund, etc.).
-- **Reusable Token**: Stable token for same `(institution_id, domain, scope_qualifiers_canonical, purpose, PAN fingerprint)`.
+- **Reusable Token**: Stable token for same `(institution_id, domain, scope_qualifiers_canonical, purpose, value_fingerprint)`.
 - **One-Time Token**: Ephemeral token minted on each request.
-- **PAN Fingerprint Key (PFK)**: An **institution-scoped** HMAC secret key used exclusively as keying material for deterministic PAN fingerprint computation. Institution-scoped PFKs ensure that fingerprints for the same PAN are distinct across institutions, preventing cross-institution correlation. The PFK is distinct from the PAN Encryption Key (PEK) and shall never be used for encryption or decryption. Both key classes are managed in Cloud KMS per SR-01 and SR-03.
-- **PAN Encryption Key (PEK)**: The envelope encryption key used to encrypt PAN payloads before storage in the vault. Managed in Cloud KMS with HSM-backed protection. **Institution-scoped** — one PEK per institution, provisioned at onboarding alongside the PFK.
+- **Value Fingerprint Key (VFK)**: An **institution-scoped** HMAC secret key used exclusively as keying material for deterministic value fingerprint computation (formerly PAN Fingerprint Key / PFK). Institution-scoped VFKs ensure that fingerprints for the same sensitive value are distinct across institutions, preventing cross-institution correlation. The VFK is distinct from the Value Encryption Key (VEK) and shall never be used for encryption or decryption. Both key classes are managed in Cloud KMS per SR-01 and SR-03.
+- **Value Encryption Key (VEK)**: The envelope encryption key used to encrypt sensitive value payloads before storage in the vault (formerly PAN Encryption Key / PEK). Managed in Cloud KMS with HSM-backed protection. **Institution-scoped** — one VEK per institution, provisioned at onboarding alongside the VFK.
 - **Delegation Authorization**: The grant that permits a specific caller application (e.g., Banno service account) to process requests on behalf of a specific institution. Enforced by the authorization policy layer (SR-02). A caller supplying an `institution_id` it is not authorized for shall receive `403 FORBIDDEN`.
 
 ## 5. Functional Requirements
@@ -72,42 +76,53 @@ This document is the baseline for architecture, implementation, security control
 
 - System shall provide `POST /v1/tokenize`.
 - Caller application identity shall be resolved server-side from the authenticated Workload Identity token.
-- Required inputs: `institution_id`, `domain`, `token_purpose`, `token_mode`, PAN payload, `idempotency_key`.
-- Optional inputs: `scope_qualifiers` (key-value map, e.g., `{"application": "banno-mobile", "channel": "web"}`), `ttl_seconds`.
+- Required inputs: `institution_id`, `sensitive_data_type`, `sensitive_value`, `token_purpose`, `token_mode`, `idempotency_key`.
+- Optional inputs: `domain` (defaults to `"default"` when omitted or blank), `scope_qualifiers` (key-value map, e.g., `{"application": "banno-mobile", "channel": "web"}`), `ttl_seconds`.
+- `sensitive_data_type` shall be a required discriminator field. Supported values: `"PAN"`, `"BANK_ACCOUNT"`. Unknown or unsupported types shall be rejected with `400 BAD_REQUEST`.
+- `sensitive_value` shall contain the data to tokenize. Validation rules are determined by `sensitive_data_type`:
+  - `PAN`: Standard Luhn-valid primary account number.
+  - `BANK_ACCOUNT`: 4–17 digits per ACH standards.
+- Companion fields (e.g., `expiry_month`, `expiry_year` for PANs; `routing_number` for bank accounts) shall be submitted inside `scope_qualifiers`. `routing_number`, when provided for `BANK_ACCOUNT`, shall be validated as exactly 9 digits. Companion fields are optional.
+- Blank or empty optional fields shall be stripped before processing and shall not cause validation errors.
 - System shall validate that the caller application is authorized to act on behalf of the supplied `institution_id`. Unauthorized institution access shall return `403 FORBIDDEN`.
 - System shall support:
-  - `REUSABLE` mode: return existing active token for matching `(institution_id, domain, scope_qualifiers_canonical, token_purpose, pan_fingerprint)` when available.
+  - `REUSABLE` mode: return existing active token for matching `(institution_id, domain, scope_qualifiers_canonical, token_purpose, value_fingerprint)` when available.
   - `ONE_TIME` mode: always mint a new token regardless of existing tokens.
-- System shall return token metadata including token value, mode, state, and optional expiry.
+- System shall return token metadata including token value, mode, state, sensitive_data_type, and optional expiry.
 
-### FR-02 Multi-Token Per Card
+### FR-02 Multi-Token Per Sensitive Value
 
-- System shall support multiple active tokens for one PAN within an institution across:
+- System shall support multiple active tokens for one sensitive value within an institution across:
   - different domains (e.g., card-payments vs. digital-banking)
   - different scope_qualifiers within a domain (e.g., different Jack Henry applications or channels)
   - different purposes (e.g., payment vs. refund)
   - one-time issuance
-- The reusable token uniqueness key is `(institution_id, domain, scope_qualifiers_canonical, purpose, pan_fingerprint)`. `scope_qualifiers` are canonicalized as lexicographically sorted key-value pairs before lookup and storage.
-- Token records and PAN fingerprints are institution-scoped. The same PAN at two different institutions produces different fingerprints (different institution PFKs) and different token namespaces.
+- The reusable token uniqueness key is `(institution_id, domain, scope_qualifiers_canonical, purpose, value_fingerprint)`. `scope_qualifiers` (including companion fields) are canonicalized as lexicographically sorted key-value pairs before lookup and storage.
+- Token records and value fingerprints are institution-scoped. The same sensitive value at two different institutions produces different fingerprints (different institution VFKs) and different token namespaces.
 - System shall prevent token value collisions globally across all institutions.
 
 ### FR-02a Token Security (PCI / GCP Alignment)
 
 - Tokens shall not contain any user-specific or cardholder-identifying information.
-- Tokens shall not be directly decryptable to recover PAN without access to the secured vault and authorized de-tokenization path.
-- Design shall ensure that compromise or loss of tokens alone cannot be used to derive or access cardholder data.
+- Tokens shall not be directly decryptable to recover the underlying sensitive value without access to the secured vault and authorized de-tokenization path.
+- Design shall ensure that compromise or loss of tokens alone cannot be used to derive or access cardholder data or bank account data.
 
 ### FR-03 De-Tokenize API
 
 - System shall provide `POST /v1/detokenize`.
-- Required inputs: `institution_id`, `domain`, `token_purpose`, `token`, `request_context.reason_code`. Caller application identity resolved from Workload Identity token.
-- Optional inputs: `scope_qualifiers`, `request_context.transaction_id`, `format_options.return_type`.
-- `request_context.operator_id` is **required when `format_options.return_type=FULL_PAN`**; optional for masked-PAN requests. Represents the institution end-user or bank employee initiating the full-PAN access. Caller-asserted, not verified by the tokenization service; written to audit event marked unverified.
+- Required inputs: `institution_id`, `token_purpose`, `token`, `request_context.reason_code`. Caller application identity resolved from Workload Identity token.
+- Optional inputs: `domain` (defaults to `"default"` when omitted or blank), `scope_qualifiers`, `request_context.transaction_id`, `format_options.return_type`.
+- `request_context.operator_id` is **required when `format_options.return_type=FULL`**; optional for masked requests. Represents the institution end-user or bank employee initiating the full-value access. Caller-asserted, not verified by the tokenization service; written to audit event marked unverified.
 - System shall validate that the caller application is authorized to detokenize for the supplied `institution_id`, `domain`, `scope_qualifiers`, and `purpose`. Unauthorized access shall return `403 FORBIDDEN`.
 - System shall fail closed on any authorization uncertainty or policy service error — no degraded allow path.
-- System shall return **masked PAN by default** (`411111******1111`). Full PAN shall only be returned when `format_options.return_type` is `FULL_PAN` and the caller holds the `full-pan` IAM scope. Absent the scope, the request shall be rejected with `403 FORBIDDEN`.
+- `format_options.return_type` values are `MASKED` (default) and `FULL`. The former `MASKED_PAN` and `FULL_PAN` values are replaced by these type-agnostic modes.
+- System shall return a **masked value by default**. Masking rules differ by `sensitive_data_type`:
+  - `PAN`: first 6 digits + last 4 digits visible, middle digits masked (e.g., `411111******1111`).
+  - `BANK_ACCOUNT`: last 4 digits visible only, all preceding digits masked (e.g., `*****6789`).
+- Full sensitive value shall only be returned when `format_options.return_type` is `FULL` and the caller holds the `full-value` IAM scope (formerly `full-pan`). Absent the scope, the request shall be rejected with `403 FORBIDDEN`.
 - `request_context.reason_code` shall be a required enumerated field (e.g., `PAYMENT_PROCESSING`, `REFUND_PROCESSING`, `FRAUD_INVESTIGATION`, `CHARGEBACK`, `SETTLEMENT`, `COMPLIANCE_REVIEW`). Requests without a valid reason code shall be rejected.
-- `request_context.operator_id` is required for `FULL_PAN` requests and optional for masked-PAN requests. It is caller-asserted audit metadata representing the institution end-user or bank employee initiating the full-PAN access. It shall be written to the audit event but is not verified by the tokenization service; it shall be marked as unverified in the audit record. Requiring it for full-PAN access creates an explicit attribution chain for the highest-risk detokenize operation.
+- `request_context.operator_id` is required for `FULL` requests and optional for masked requests. It is caller-asserted audit metadata representing the institution end-user or bank employee initiating the full-value access. It shall be written to the audit event but is not verified by the tokenization service; it shall be marked as unverified in the audit record. Requiring it for full-value access creates an explicit attribution chain for the highest-risk detokenize operation.
+- Blank or empty optional fields shall be stripped before processing and shall not cause validation errors.
 
 ### FR-04 Token Revocation
 
@@ -115,8 +130,8 @@ This document is the baseline for architecture, implementation, security control
 - System shall validate that the caller application is authorized to revoke tokens for the supplied `institution_id`.
 - System shall support revocation by:
   - explicit token value
-  - fingerprint selector: `(institution_id, domain, pan_fingerprint)` with optional `scope_qualifiers` filter. When `scope_qualifiers` are provided, revocation is restricted to tokens matching both the domain and all supplied qualifier key-value pairs. When omitted, all tokens for the fingerprint within the institution and domain are revoked.
-- A required `reason` field shall be provided for all revocation requests (e.g., `institution_request`, `fraud_signal`, `card_compromised`, `card_reissued`, `application_decommissioned`, `compliance_action`).
+  - fingerprint selector: `(institution_id, domain, value_fingerprint)` with optional `scope_qualifiers` filter. When `scope_qualifiers` are provided, revocation is restricted to tokens matching both the domain and all supplied qualifier key-value pairs. When omitted, all tokens for the fingerprint within the institution and domain are revoked.
+- A required `reason` field shall be provided for all revocation requests (e.g., `institution_request`, `fraud_signal`, `card_compromised`, `card_reissued`, `account_closed`, `application_decommissioned`, `compliance_action`).
 - Revoked tokens shall not be de-tokenizable. Revocation is permanent and not reversible via API.
 
 ### FR-05 Idempotency
@@ -128,23 +143,23 @@ This document is the baseline for architecture, implementation, security control
 ### FR-06 Auditability
 
 - Every tokenize, detokenize, revoke, and denied request shall emit an audit event.
-- Audit events shall include: request_id, caller_application (Jack Henry service identity), institution_id, action, outcome, timestamp, domain, scope_qualifiers, token_purpose.
+- Audit events shall include: request_id, caller_application (Jack Henry service identity), institution_id, sensitive_data_type, action, outcome, timestamp, domain, scope_qualifiers, token_purpose.
 - Detokenize audit events shall additionally include: reason_code, operator_id (marked unverified if caller-asserted — may represent an institution bank employee or end-user), return_type (MASKED or FULL).
 - Revoke audit events shall additionally include: revocation selector type (token or fingerprint), reason, and revoked_count.
-- Audit events shall never include PAN, CVV, key material, or full token values.
+- Audit events shall never include sensitive values (PAN, bank account number), CVV, key material, or full token values.
 - `institution_id` shall be a mandatory, indexed field on all audit events to support institution-level audit queries and compliance reporting for individual bank/credit union clients.
 
 ## 6. Data Requirements
 
 ### DR-01 Vault Data Model
 
-- Vault shall maintain card records and token records with logical linkage, partitioned by `institution_id`. Card records store the AES-256-GCM encrypted PAN and expiry. Token records store the token value, state, institution_id, domain, scope_qualifiers_canonical, purpose, token_mode, caller_application, and a reference to the card record.
-- PAN shall never be stored plaintext. Field-level encryption is applied at the application layer before any write per SR-01.
-- PAN fingerprint shall be computed using HMAC-SHA-256 with the **institution-scoped PFK** per SR-01. Fingerprints are institution-specific: the same PAN at two different institutions produces different fingerprints, preventing cross-institution correlation.
-- Token records shall include a canonicalized `scope_qualifiers` representation (sorted key-value pairs) to support deterministic lookup.
-- Primary index for reusable token lookup: `(institution_id, domain, scope_qualifiers_canonical, purpose, pan_fingerprint, state)`.
-- Secondary index for fingerprint-based revocation: `(institution_id, domain, pan_fingerprint, state)` with optional scope_qualifiers filter at query time.
-- `scope_qualifiers` keys and values shall be validated as non-sensitive strings; PAN-like values in qualifier fields shall be rejected at input validation.
+- Vault shall maintain sensitive value records and token records with logical linkage, partitioned by `institution_id`. Sensitive value records store the AES-256-GCM encrypted sensitive value, the `sensitive_data_type` discriminator, and any companion data captured in scope qualifiers (e.g., expiry for PANs, routing number for bank accounts). Token records store the token value, state, institution_id, domain, scope_qualifiers_canonical, purpose, token_mode, caller_application, sensitive_data_type, and a reference to the sensitive value record.
+- Sensitive values (PAN, bank account number) shall never be stored plaintext. Field-level encryption is applied at the application layer before any write per SR-01.
+- Value fingerprint shall be computed using HMAC-SHA-256 with the **institution-scoped VFK** per SR-01. Fingerprints are institution-specific: the same sensitive value at two different institutions produces different fingerprints, preventing cross-institution correlation.
+- Token records shall include a canonicalized `scope_qualifiers` representation (sorted key-value pairs, including companion fields) to support deterministic lookup.
+- Primary index for reusable token lookup: `(institution_id, domain, scope_qualifiers_canonical, purpose, value_fingerprint, state)`.
+- Secondary index for fingerprint-based revocation: `(institution_id, domain, value_fingerprint, state)` with optional scope_qualifiers filter at query time.
+- `scope_qualifiers` keys and values shall be validated as non-sensitive strings; PAN-like or account-number-like values in qualifier fields (other than designated companion fields) shall be rejected at input validation.
 - All Spanner rows shall include `institution_id` as the leading key component to ensure physical data partitioning by institution.
 
 ### DR-02 Data Retention
@@ -161,14 +176,14 @@ This document is the baseline for architecture, implementation, security control
 ### SR-01 Encryption
 
 - CHD shall be encrypted in transit using TLS 1.2 minimum; TLS 1.3 is preferred.
-- CHD shall be encrypted at rest using **field-level (application-layer) envelope encryption** with AEAD (AES-256-GCM or equivalent). The minimum symmetric key length is 256 bits per PCI DSS 3.4.1.
-- Disk-level, partition-level, or storage-layer encryption (e.g., Spanner's default at-rest encryption, Cloud Storage default encryption) does not satisfy the PAN unreadability requirement and shall not be used as the sole protection mechanism per PCI DSS 3.5.1.2. Application-layer encryption must be applied before writes to any storage system.
-- PAN fingerprint shall be computed using **HMAC-SHA-256** with a dedicated **institution-scoped** PAN Fingerprint Key (PFK). Unkeyed hashes (e.g., plain SHA-256 of the PAN) are prohibited per PCI DSS 3.5.1.1. Institution-scoped PFKs ensure that fingerprints for the same PAN are unique per institution, preventing cross-institution correlation even if an attacker obtains fingerprint values.
+- Sensitive data (PAN, bank account number) shall be encrypted at rest using **field-level (application-layer) envelope encryption** with AEAD (AES-256-GCM or equivalent). The minimum symmetric key length is 256 bits per PCI DSS 3.4.1.
+- Disk-level, partition-level, or storage-layer encryption (e.g., Spanner's default at-rest encryption, Cloud Storage default encryption) does not satisfy the sensitive value unreadability requirement and shall not be used as the sole protection mechanism per PCI DSS 3.5.1.2. Application-layer encryption must be applied before writes to any storage system.
+- Value fingerprint shall be computed using **HMAC-SHA-256** with a dedicated **institution-scoped** Value Fingerprint Key (VFK, formerly PFK). Unkeyed hashes (e.g., plain SHA-256 of the sensitive value) are prohibited per PCI DSS 3.5.1.1. Institution-scoped VFKs ensure that fingerprints for the same sensitive value are unique per institution, preventing cross-institution correlation even if an attacker obtains fingerprint values.
 - Two distinct key classes shall be maintained in Cloud KMS and shall never be used interchangeably:
-  - **PAN Encryption Key (PEK)**: Used for envelope encryption of stored PAN payloads. Grants: `roles/cloudkms.cryptoKeyEncrypterDecrypter`. **Institution-scoped** — one PEK per institution. Provisioned at institution onboarding alongside the PFK.
-  - **PAN Fingerprint Key (PFK)**: Used only for HMAC-based PAN fingerprint computation. Grants: a separate, scoped KMS key with MAC sign/verify permissions. **Must be institution-scoped** — one PFK per institution, no sharing.
-- Both PEK and PFK shall use HSM-backed Cloud KMS key rings in production per PCI DSS 3.6.
-- KEKs and PFKs shall be rotated per SR-03. Institution onboarding shall include provisioning of a new institution-scoped PFK (and PEK if institution-scoped) in Cloud KMS.
+  - **Value Encryption Key (VEK)** (formerly PEK): Used for envelope encryption of stored sensitive value payloads. Grants: `roles/cloudkms.cryptoKeyEncrypterDecrypter`. **Institution-scoped** — one VEK per institution. Provisioned at institution onboarding alongside the VFK.
+  - **Value Fingerprint Key (VFK)** (formerly PFK): Used only for HMAC-based value fingerprint computation. Grants: a separate, scoped KMS key with MAC sign/verify permissions. **Must be institution-scoped** — one VFK per institution, no sharing.
+- Both VEK and VFK shall use HSM-backed Cloud KMS key rings in production per PCI DSS 3.6.
+- KEKs and VFKs shall be rotated per SR-03. Institution onboarding shall include provisioning of a new institution-scoped VFK (and VEK if institution-scoped) in Cloud KMS.
 
 ### SR-02 Access Control
 
@@ -192,10 +207,10 @@ This document is the baseline for architecture, implementation, security control
 
 ### SR-03 Key Management
 
-- Keys shall have defined rotation cadence (target 90 days); Cloud KMS rotation period shall be configured accordingly. This applies to both PEK and PFK key classes.
+- Keys shall have defined rotation cadence (target 90 days); Cloud KMS rotation period shall be configured accordingly. This applies to both VEK and VFK key classes.
 - Key usage shall be logged and monitored for anomaly detection.
 - **Separation of duties between key management and data access shall be enforced at the IAM level.** IAM roles granting key management capabilities (e.g., `roles/cloudkms.admin`, `roles/cloudkms.cryptoKeyVersionCreator`, `roles/cloudkms.cryptoKeyVersionDestroyer`) shall not be granted to any principal that also holds data-plane access to Spanner vault tables, Secret Manager secrets containing CHD, or Redis cache data.
-- The runtime tokenization service account shall hold only the minimum KMS roles required for runtime encrypt/decrypt operations (`roles/cloudkms.cryptoKeyEncrypterDecrypter` for PEK; MAC sign/verify for PFK). It shall never hold KMS administrative roles.
+- The runtime tokenization service account shall hold only the minimum KMS roles required for runtime encrypt/decrypt operations (`roles/cloudkms.cryptoKeyEncrypterDecrypter` for VEK; MAC sign/verify for VFK). It shall never hold KMS administrative roles.
 - Key management administrative access (rotation, import, destruction) shall be restricted to a designated key custodian identity separate from both the service runtime identity and database administrator identities.
 - Compliance with separation of duties shall be validated quarterly via IAM policy snapshot review, producing an evidence artifact per SR-05.
 

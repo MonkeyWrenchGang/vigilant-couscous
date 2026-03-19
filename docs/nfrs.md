@@ -2,10 +2,10 @@
 
 ## Service Scope
 
-- System: Jack Henry central PCI tokenization and de-tokenization platform.
+- System: Jack Henry central tokenization and de-tokenization platform for multiple sensitive data types (PAN and bank account numbers).
 - Stack: GCP + Python. Compute: GKE private cluster (VPC-native pod networking satisfies PCI DSS 1.2/1.3 without Customized Approach).
 - Topology: single region, multi-zone high availability (multi-region active-active is a Future Phase item).
-- Data class: PCI-sensitive PAN data in vault boundary, partitioned by `institution_id`.
+- Data class: sensitive values (PAN, bank account numbers) in vault boundary, partitioned by `institution_id`. The vault stores values generically as `encrypted_value` with a corresponding `value_fingerprint`.
 - Callers: Jack Henry internal application services (Banno, SilverLake, Symitar, ProfitStars) acting on behalf of bank and credit union institution clients.
 
 ## Throughput And Latency Targets
@@ -65,10 +65,10 @@ Notes:
 
 ## Security And Compliance NFRs
 
-- PAN data encrypted at rest using AES-256-GCM envelope encryption (field-level, not disk-level).
-- Two KMS key classes per institution: PFK (HMAC-SHA-256 for fingerprinting) and PEK (AES-256-GCM for encryption). Both are institution-scoped (one per institution, provisioned at onboarding).
+- Sensitive values (PAN, bank account numbers) encrypted at rest using AES-256-GCM envelope encryption (field-level, not disk-level).
+- Two KMS key classes per institution: PFK (HMAC-SHA-256 for `value_fingerprint` generation) and PEK (AES-256-GCM for `encrypted_value` encryption). Both are institution-scoped (one per institution, provisioned at onboarding).
 - Keys managed in Cloud KMS with HSM-backed protection; 90-day rotation.
-- No PAN/CVV in logs, metrics labels, traces, or error bodies.
+- No PAN/CVV/bank account numbers in logs, metrics labels, traces, or error bodies.
 - All callers authenticated via Workload Identity; no static API keys.
 - Authorization: Workload Identity validity → delegation grant for `institution_id` → domain/purpose policy → (detokenize) full-pan scope gate.
 - Full audit record for tokenization, de-tokenization, revocation, and failed attempts, with `caller_application` and `institution_id` as mandatory indexed fields.
@@ -93,6 +93,6 @@ Notes:
 
 - Load tests show sustained 50k RPS while meeting p95/p99 SLOs under multi-institution, multi-caller-application traffic mix.
 - Rate limiting validated: per-institution and per-caller-application quotas enforced independently.
-- Chaos/failure tests prove fail-closed behavior for de-tokenize on delegation grant service degradation — no PAN released.
+- Chaos/failure tests prove fail-closed behavior for de-tokenize on delegation grant service degradation — no sensitive value released.
 - Synthetic probes validate health/readiness every 30 seconds from at least 3 zones.
 - Institution Registry and delegation grant check latency contributions measured and within NFR budgets under load.

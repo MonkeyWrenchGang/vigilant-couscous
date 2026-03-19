@@ -23,7 +23,8 @@ def tokenize(
     caller_identity: str = Depends(get_caller_identity),
     service: TokenizeService = Depends(_get_service),
 ) -> TokenizeResponse:
-    """Issue a token for a PAN scoped to an institution, domain, and optional scope_qualifiers.
+    """Issue a token for a sensitive value (PAN, bank account number, etc.) scoped to
+    an institution, domain, and optional scope_qualifiers.
 
     - **REUSABLE** mode returns an existing ACTIVE token if one exists for the scope.
     - **ONE_TIME** mode always mints a new token.

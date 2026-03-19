@@ -10,11 +10,12 @@ from typing import Literal
 class TokenRecord:
     token: str
     institution_id: str
+    sensitive_data_type: str  # "PAN", "BANK_ACCOUNT", etc.
     domain: str
     scope_qualifiers_canonical: str  # canonicalized JSON string
     purpose: str
-    pan_fingerprint: str
-    encrypted_pan: str  # base64 opaque blob from CryptoProvider.encrypt_pan
+    value_fingerprint: str
+    encrypted_value: str  # base64 opaque blob from CryptoProvider.encrypt_value
     status: Literal["ACTIVE", "REVOKED", "EXPIRED"] = "ACTIVE"
     created_at: datetime = field(default_factory=datetime.utcnow)
     expires_at: datetime | None = None
@@ -37,11 +38,11 @@ class VaultStore(ABC):
         self,
         institution_id: str,
         domain: str,
-        pan_fingerprint: str,
+        value_fingerprint: str,
         scope_qualifiers_canonical: str,
         purpose: str,
     ) -> TokenRecord | None:
-        """Find the ACTIVE token for a given PAN scope (REUSABLE lookup)."""
+        """Find the ACTIVE token for a given scope (REUSABLE lookup)."""
 
     @abstractmethod
     def revoke_by_token(self, institution_id: str, token: str) -> int:
@@ -51,7 +52,7 @@ class VaultStore(ABC):
     def revoke_by_fingerprint(
         self,
         institution_id: str,
-        pan_fingerprint: str,
+        value_fingerprint: str,
         domain: str | None,
         scope_qualifiers_filter: dict[str, str] | None,
     ) -> int:

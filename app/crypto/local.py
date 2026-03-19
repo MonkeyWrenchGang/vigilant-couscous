@@ -53,16 +53,16 @@ class LocalCryptoProvider(CryptoProvider):
             ).derive(self._master_key)
         return self._pek_cache[institution_id]
 
-    def hmac_fingerprint(self, institution_id: str, pan: str) -> str:
-        return hmac.new(self._pfk(institution_id), pan.encode(), hashlib.sha256).hexdigest()
+    def hmac_fingerprint(self, institution_id: str, value: str) -> str:
+        return hmac.new(self._pfk(institution_id), value.encode(), hashlib.sha256).hexdigest()
 
-    def encrypt_pan(self, institution_id: str, pan: str) -> str:
+    def encrypt_value(self, institution_id: str, value: str) -> str:
         nonce = os.urandom(12)
         aead = AESGCM(self._pek(institution_id))
-        ciphertext = aead.encrypt(nonce, pan.encode(), institution_id.encode())
+        ciphertext = aead.encrypt(nonce, value.encode(), institution_id.encode())
         return base64.b64encode(nonce + ciphertext).decode()
 
-    def decrypt_pan(self, institution_id: str, ciphertext_b64: str) -> str:
+    def decrypt_value(self, institution_id: str, ciphertext_b64: str) -> str:
         raw = base64.b64decode(ciphertext_b64)
         nonce, ciphertext = raw[:12], raw[12:]
         aead = AESGCM(self._pek(institution_id))

@@ -6,9 +6,10 @@ from app.models.requests import RevokeRequest, TokenizeRequest
 from tests.conftest import TEST_CALLER, TEST_INSTITUTION, TEST_INSTITUTION_2, TEST_PAN
 
 
-def _tokenize(service, pan=TEST_PAN, institution_id=TEST_INSTITUTION, scope_qualifiers=None):
+def _tokenize(service, sensitive_value=TEST_PAN, institution_id=TEST_INSTITUTION, scope_qualifiers=None):
     req = TokenizeRequest(
-        pan=pan,
+        sensitive_data_type="PAN",
+        sensitive_value=sensitive_value,
         institution_id=institution_id,
         domain="card-payments",
         scope_qualifiers=scope_qualifiers or {},
@@ -40,7 +41,7 @@ class TestRevokeService:
         resp = revoke_service.revoke(
             RevokeRequest(
                 institution_id=TEST_INSTITUTION,
-                pan_fingerprint=fingerprint,
+                value_fingerprint=fingerprint,
                 domain="card-payments",
             ),
             TEST_CALLER,
@@ -55,7 +56,7 @@ class TestRevokeService:
         resp = revoke_service.revoke(
             RevokeRequest(
                 institution_id=TEST_INSTITUTION,
-                pan_fingerprint=fingerprint,
+                value_fingerprint=fingerprint,
                 domain="card-payments",
                 scope_qualifiers_filter={"application": "banno-mobile"},
             ),

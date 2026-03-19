@@ -37,11 +37,11 @@ class RevokeService:
             if count > 0:
                 self._cache.delete(request.institution_id, request.token)
 
-        elif request.pan_fingerprint:
+        elif request.value_fingerprint:
             # Bulk fingerprint-selector revocation with optional scope filter
             count = self._vault.revoke_by_fingerprint(
                 institution_id=request.institution_id,
-                pan_fingerprint=request.pan_fingerprint,
+                value_fingerprint=request.value_fingerprint,
                 domain=request.domain,
                 scope_qualifiers_filter=request.scope_qualifiers_filter,
             )
@@ -49,7 +49,7 @@ class RevokeService:
                 # Bulk cache eviction — SCAN-based, evicts all institution tokens
                 # (conservative: evicts more than necessary but safe)
                 self._cache.delete_by_pattern(
-                    request.institution_id, request.pan_fingerprint
+                    request.institution_id, request.value_fingerprint
                 )
 
         logger.info(
@@ -57,6 +57,6 @@ class RevokeService:
             count,
             request.institution_id,
             request.token or "n/a",
-            request.pan_fingerprint or "n/a",
+            request.value_fingerprint or "n/a",
         )
         return RevokeResponse(revoked_count=count, institution_id=request.institution_id)

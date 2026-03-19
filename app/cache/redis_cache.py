@@ -11,7 +11,7 @@ class TokenCache:
     """Optional Redis cache for hot token lookups.
 
     Cache key format: tok:{institution_id}:{token}
-    Value: encrypted_pan blob (base64 string) — never plaintext PAN.
+    Value: encrypted value blob (base64 string) — never plaintext sensitive data.
 
     If redis_url is None, all methods are no-ops (cache disabled).
     Institution isolation is enforced by the leading institution_id in the key.
@@ -51,13 +51,13 @@ class TokenCache:
         self,
         institution_id: str,
         token: str,
-        encrypted_pan: str,
+        encrypted_value: str,
         ttl: int = _DEFAULT_TTL,
     ) -> None:
         if not self._enabled or self._client is None:
             return
         try:
-            self._client.setex(self._key(institution_id, token), ttl, encrypted_pan)
+            self._client.setex(self._key(institution_id, token), ttl, encrypted_value)
         except Exception as exc:
             logger.warning("Redis SET failed: %s", exc)
 
